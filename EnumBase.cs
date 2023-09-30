@@ -437,16 +437,16 @@ namespace BurstEnums
         /// Check if any flag bit is set without boxing
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool Match<T>(this T a, T b) where T : unmanaged, Enum => (a.ToMask() & b.ToMask()) != 0;
+        public static bool Match<T>(this T mask, T flag) where T : unmanaged, Enum => (mask.ToMask() & flag.ToMask()) != 0;
 
         /// <summary>
-        /// Check if entire flag bit mask is set without boxing
+        /// Check if all flag bits are set without boxing
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool Exact<T>(this T a, T b) where T : unmanaged, Enum
+        public static bool Exact<T>(this T mask, T flag) where T : unmanaged, Enum
         {
-            var check = b.ToMask();
-            return (a.ToMask() & check) == check;
+            var check = flag.ToMask();
+            return (mask.ToMask() & check) == check;
         }
 
         /// <summary>
