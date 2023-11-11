@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Reflection;
 using UnityEditor;
 using Unity.Mathematics;
+using System.Linq;
 
 namespace BurstEnums
 {
@@ -22,7 +23,7 @@ namespace BurstEnums
         [NativeDisableUnsafePtrRestriction]
         private static readonly UnsafeParallelHashMap<long, int> typeHashToTypeIndexMap;
 
-        private const int defaultSize = 1024;
+        private const int defaultAllocationLength = 1024;
 
         [Flags]
         public enum EnumFlags : byte
@@ -30,7 +31,7 @@ namespace BurstEnums
             None = 0,
             Flag = 1 << 0,
             Sign = 1 << 1,
-            Zero = 1 << 2,
+            Zero = 1 << 2
         }
 
         private struct EnumBaseContext { }
@@ -56,8 +57,8 @@ namespace BurstEnums
 #if UNITY_EDITOR
             AssemblyReloadEvents.beforeAssemblyReload += Cleanup;
 #endif
-            typeHashToTypeIndexMap = new UnsafeParallelHashMap<long, int>(defaultSize, Allocator.Persistent);
-            entries = UnsafeList<EnumDataRecord>.Create(defaultSize, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+            typeHashToTypeIndexMap = new UnsafeParallelHashMap<long, int>(defaultAllocationLength, Allocator.Persistent);
+            entries = UnsafeList<EnumDataRecord>.Create(defaultAllocationLength, Allocator.Persistent, NativeArrayOptions.ClearMemory);
             entries->Add(default);
             EnumSharedStaticTypeIndexMapPointer.Ref.Data = typeHashToTypeIndexMap.GetUnsafePtr();
             EnumSharedStaticEnumDataArrayPointer.Ref.Data = new IntPtr(entries->Ptr);
@@ -164,12 +165,8 @@ namespace BurstEnums
             int length = values.Length;
             ulong sum = 0;
             EnumFlags flags = 0;
-
-            if (type.GetCustomAttributes(typeof(FlagsAttribute), false).Length > 0)
-                flags |= EnumFlags.Flag;
-
-            if ((uType == typeof(byte) || uType == typeof(ushort) || uType == typeof(uint) || uType == typeof(ulong)) == false)
-                flags |= EnumFlags.Sign;
+            flags.Toggle(EnumFlags.Flag, type.GetCustomAttributes(typeof(FlagsAttribute), false).Length > 0);
+            flags.Toggle(EnumFlags.Sign, uType == typeof(sbyte) || uType == typeof(short) || uType == typeof(int) || uType == typeof(long));
 
             int arrayByteLength = sizeof(long) * length;
             IntPtr arrayPtr = Marshal.AllocHGlobal(arrayByteLength);
@@ -196,7 +193,7 @@ namespace BurstEnums
     /// <summary>
     /// Burst compatible static generic class to handle enum data
     /// </summary>
-    public static unsafe class EnumBase<T> where T : unmanaged, Enum
+    public static class EnumBase<T> where T : unmanaged, Enum
     {
         public static ref readonly EnumDataRecord data => ref EnumBase.GetEnumData<T>();
         public static T All => data.Sum.ToEnum<T>();
@@ -238,7 +235,7 @@ namespace BurstEnums
         public readonly ulong Sum;
         public readonly long Hash;
         public readonly int Length;
-        public readonly int Size;
+        public readonly byte Size;
         public readonly EnumBase.EnumFlags Flags;
 
         public long Default => IsZeroDefined ? 0 : Min;
@@ -255,7 +252,7 @@ namespace BurstEnums
             Sum = sum;
             Hash = hash;
             Length = length;
-            Size = size;
+            Size = (byte)size;
             Flags = flags;
         }
 
