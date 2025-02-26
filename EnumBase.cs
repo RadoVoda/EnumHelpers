@@ -8,10 +8,14 @@ using System.Runtime.InteropServices;
 using System.Reflection;
 using UnityEditor;
 using Unity.Mathematics;
-using System.Linq;
+using UnityEngine.UIElements;
 
 namespace BurstEnums
 {
+    public class EnumFlagAttribute : PropertyAttribute
+    {
+        public EnumFlagAttribute() { }
+    }
     /// <summary>
     /// Burst compatible static class to handle enum data
     /// </summary>
@@ -31,7 +35,8 @@ namespace BurstEnums
             None = 0,
             Flag = 1 << 0,
             Sign = 1 << 1,
-            Zero = 1 << 2
+            Zero = 1 << 2,
+            Gaps = 1 << 3
         }
 
         private struct EnumBaseContext { }
@@ -174,6 +179,10 @@ namespace BurstEnums
             void* sourcePtr = UnsafeUtility.PinGCArrayAndGetDataAddress(values, out var gcSourceHandle);
             UnsafeUtility.MemClear(targetPtr, arrayByteLength);
             UnsafeUtility.MemCpyStride(targetPtr, sizeof(long), sourcePtr, size, size, length);
+            
+            long min = UnsafeUtility.ReadArrayElement<long>(targetPtr, 0);
+            long max = UnsafeUtility.ReadArrayElement<long>(targetPtr, length - 1);
+            flags.Toggle(EnumFlags.Gaps, flags.Match(EnumFlags.Flag) ? min << (length - 1) != max : length - 1 != max - min);
 
             for (int i = 0; i < length; ++i)
             {
@@ -244,6 +253,7 @@ namespace BurstEnums
         public bool IsNull => Pointer == null;
         public bool IsFlag => Flags.Match(EnumBase.EnumFlags.Flag);
         public bool Signed => Flags.Match(EnumBase.EnumFlags.Sign);
+        public bool HasGaps => Flags.Match(EnumBase.EnumFlags.Gaps);
         public bool IsZeroDefined => Flags.Match(EnumBase.EnumFlags.Zero);
 
         public EnumDataRecord(IntPtr pointer, ulong sum, long hash, int length, int size, EnumBase.EnumFlags flags)
@@ -270,7 +280,12 @@ namespace BurstEnums
             if (IsFlag)
                 return (Sum & value) == value;
 
-            return BinarySearch(Pointer.ToPointer(), (long)value, 0, Length - 1) != -1;
+            if (HasGaps == false)
+            {
+                return Min < (long)value && (long)value < Max;
+            }
+
+            return BinarySearch(Pointer.ToPointer(), Length, (long)value) != -1;
         }
 
         /// <summary>
@@ -284,7 +299,14 @@ namespace BurstEnums
             if (IsMatchingType<T>() == false)
                 return -1;
 
-            return BinarySearch(Pointer.ToPointer(), (long)check.ToMask(), 0, Length - 1);
+            var value = check.ToMask();
+
+            if (HasGaps == false)
+            {
+                return IsFlag ? math.tzcnt(value) : (int)((long)value - Min);
+            }
+
+            return BinarySearch(Pointer.ToPointer(), Length, (long)value);
         }
 
         // <summary>
@@ -306,25 +328,28 @@ namespace BurstEnums
 
         // <summary>
         /// Recursively find index of given key.
-        /// Returns -1 if it is not defined.
+        /// Returns -1 if it does not exist.
         /// </summary>
-        private static int BinarySearch(void* ptr, long key, int min, int max)
+        private static int BinarySearch(void* ptr, int length, long key)
         {
-            if (min > max)
-                return -1;
+            int find = 0;
+            
+            while (length > 1)
+            {
+                int half = length >> 1;
+                length -= half;
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+                int quarter = length >> 1;
+                Unity.Burst.Intrinsics.Common.Prefetch(ptr + find + quarter - 1);
+                Unity.Burst.Intrinsics.Common.Prefetch(ptr + find + half + quarter - 1);
+#endif
+                var element = UnsafeUtility.ReadArrayElement<long>(ptr, find + half - 1);
+                find += Branchless.IfElse(element < key, half, 0);
+            }
 
-            int mid = (min + max) >> 1;
-            var element = UnsafeUtility.ReadArrayElement<long>(ptr, mid);
-
-            if (key == element)
-                return mid;
-
-            if (key < element)
-                max = --mid;
-            else
-                min = ++mid;
-
-            return BinarySearch(ptr, key, min, max);
+            var found = UnsafeUtility.ReadArrayElement<long>(ptr, find);
+            find = Branchless.IfElse(found == key, find, -1);
+            return find;
         }
     }
 
@@ -437,6 +462,12 @@ namespace BurstEnums
         public static bool Match<T>(this T mask, T flag) where T : unmanaged, Enum => (mask.ToMask() & flag.ToMask()) != 0;
 
         /// <summary>
+        /// Check how many flags are set without boxing, zero is no match
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int MatchCount<T>(this T mask, T flag) where T : unmanaged, Enum => math.countbits(mask.ToMask() & flag.ToMask());
+
+        /// <summary>
         /// Check if all flag bits are set without boxing
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -461,6 +492,12 @@ namespace BurstEnums
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool Equal<T>(this T a, T b) where T : unmanaged, Enum => a.ToMask() == b.ToMask();
+
+        /// <summary>
+        /// Compare two enum without boxing
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int Compare<T>(this T a, T b) where T : unmanaged, Enum => a.ToMask().CompareTo(b.ToMask());
 
         /// <summary>
         /// Get highest set flag
