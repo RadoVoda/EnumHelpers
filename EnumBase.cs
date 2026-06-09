@@ -435,7 +435,18 @@ namespace BurstEnums
         /// Return ulong mask value of an Enum without boxing
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ulong ToMask<T>(this T value) where T : Enum => UnsafeUtility.As<T, ulong>(ref value);
+        public static ulong ToMask<T>(this T value) where T : Enum
+        {
+            ulong mask = 0;
+            mask = System.Runtime.CompilerServices.Unsafe.SizeOf<T>() switch
+            {
+                1 => UnsafeUtility.As<T, byte>(ref value),
+                2 => UnsafeUtility.As<T, ushort>(ref value),
+                4 => UnsafeUtility.As<T, uint>(ref value),
+                _ => UnsafeUtility.As<T, ulong>(ref value),
+            };
+            return mask;
+        }
 
         /// <summary>
         /// Return Enum value from ulong mask without boxing
